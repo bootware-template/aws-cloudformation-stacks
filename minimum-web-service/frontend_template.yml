@@ -1,0 +1,192 @@
+---
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  Frontend CloudFormation Template.
+  This template will create the following resources.
+    - S3 bucket used for frontend page hosting
+    - Bucket policy related to the S3 bucket
+    - CloudFront Origin Access Identity
+    - CloudFront Distribution
+    - Route53 record
+
+Parameters:  
+  S3FrontBucket:
+    Description: Frontend bucket name
+    Type: String
+
+  WebsiteDomainName:
+    Description: Frontend domain name
+    Type: String
+  
+  SSLCertificateArn:
+    Description: ACM certificate identity
+    Type: String
+
+  HostedZoneResource:
+    Description: Hosted zone id
+    Type: String
+
+  FrontendDistributionDefaultTTL:
+    Description: The default amount of time in CloudFront caches, in seconds
+    Type: String
+    Default: 86400
+
+  FrontendDistributionMaxTTL:
+    Description: The maximum amount of time in CloudFront caches, in seconds
+    Type: String
+    Default: 31536000
+
+  FrontendDistributionMinTTL:
+    Description: The minimun amount of time in CloudFront caches, in seconds
+    Type: String
+    Default: 0
+
+  TagKey:
+    Description: Resources tag key name that identifies related stack.
+    Type: String
+    Default: ServiceName
+    AllowedPattern: '[\x20-\x7E]*'
+    ConstraintDescription: Can contain only ASCII characters.
+
+  ApplicationName:
+    Description: Resources tag value that identifies related stack.
+    Type: String
+    AllowedPattern: '[\x20-\x7E]*'
+    MinLength: 1
+    MaxLength: 17
+    ConstraintDescription: Can contain only ASCII characters.
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: "Frontend setup"
+        Parameters:
+          - WebsiteDomainName
+          - S3FrontBucket
+          - SSLCertificateArn
+          - HostedZoneResource
+      - Label:
+          default: "Frontend Distribution setup"
+        Parameters:
+          - FrontendDistributionDefaultTTL
+          - FrontendDistributionMaxTTL
+          - FrontendDistributionMinTTL
+      - Label:
+          default: "Application tag setting"
+        Parameters:
+          - TagKey
+          - ApplicationName
+
+Conditions:
+  isCustomDomain: !Not [!Equals [ !Ref WebsiteDomainName, "" ]]
+
+Resources:
+  FrontendAssetsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Ref S3FrontBucket
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: True
+        BlockPublicPolicy: True
+        IgnorePublicAcls: True
+        RestrictPublicBuckets: True
+      Tags:
+        - Key: !Ref TagKey
+          Value: !Ref ApplicationName
+
+  AssetsBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref FrontendAssetsBucket
+      PolicyDocument:
+        Statement:
+          - Action: s3:GetObject
+            Effect: Allow
+            Resource: !Sub arn:aws:s3:::${FrontendAssetsBucket}/*
+            Principal:
+              AWS: !Sub arn:aws:iam::cloudfront:user/CloudFront Origin Access Identity ${CloudFrontOriginAccessIdentity}
+
+  CloudFrontOriginAccessIdentity:
+    Type: AWS::CloudFront::CloudFrontOriginAccessIdentity
+    Properties:
+      CloudFrontOriginAccessIdentityConfig:
+        Comment: !Ref AWS::StackName
+
+  FrontendDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Origins:
+        - Id: S3Origin
+          DomainName: !Sub ${FrontendAssetsBucket}.s3-${AWS::Region}.amazonaws.com
+          S3OriginConfig:
+            OriginAccessIdentity: !Sub origin-access-identity/cloudfront/${CloudFrontOriginAccessIdentity}
+        Enabled: 'true'
+        DefaultRootObject: index.html
+        Comment: !Sub ${AWS::StackName}-distribution
+        DefaultCacheBehavior:
+          TargetOriginId: S3Origin
+          SmoothStreaming: 'false'
+          ForwardedValues:
+            QueryString: 'false'
+            Cookies:
+              Forward: all
+          DefaultTTL: !Ref FrontendDistributionDefaultTTL
+          MaxTTL: !Ref FrontendDistributionMaxTTL
+          MinTTL: !Ref FrontendDistributionMinTTL
+          ViewerProtocolPolicy: redirect-to-https
+        CustomErrorResponses:
+          - ErrorCode: '404'
+            ResponsePagePath: "/index.html"
+            ResponseCode: '200'
+            ErrorCachingMinTTL: '10'
+          - ErrorCode: '403'
+            ResponsePagePath: "/index.html"
+            ResponseCode: '200'
+            ErrorCachingMinTTL: '10'
+        Aliases:
+          !If
+            - isCustomDomain
+            - !Ref WebsiteDomainName
+            - !Ref "AWS::NoValue"
+        ViewerCertificate:
+          !If
+            - isCustomDomain
+            - SslSupportMethod: sni-only
+              MinimumProtocolVersion: TLSv1
+              AcmCertificateArn: !Ref SSLCertificateArn
+            - !Ref "AWS::NoValue"
+        HttpVersion: http2
+      Tags:
+        - Key: !Ref TagKey
+          Value: !Ref ApplicationName
+
+  FrontendDNSRecord:
+    Type: AWS::Route53::RecordSetGroup
+    Condition: isCustomDomain
+    Properties:
+      HostedZoneId: !Ref HostedZoneResource
+      RecordSets:
+        - Name: !Ref WebsiteDomainName
+          Type: A
+          AliasTarget:
+            DNSName: !GetAtt FrontendDistribution.DomainName
+            HostedZoneId: Z2FDTNDATAQYW2
+
+Outputs:
+  FrontendURL:
+    Condition: isCustomDomain
+    Value: !Join 
+      - ''
+      - - 'https://'
+        - !Ref WebsiteDomainName
+    Description: Frontend URL
+
+  DistributionDomainName:
+    Value: !GetAtt FrontendDistribution.DomainName
+    Description: newly created cloudfront domain
+
+  S3FrontBucket:
+    Value: !Ref S3FrontBucket
+    Description: newly created frontend bucket

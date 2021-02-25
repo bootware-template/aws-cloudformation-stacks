@@ -1,0 +1,902 @@
+---
+AWSTemplateFormatVersion: 2010-09-09
+Description: >-
+  Backend CloudFormation Template for cloudcalte restapi.
+  This template will create the following new resources.
+    - VPC
+    - Two public subnets and two private subnets. Each subnet uses default network ACL.
+    - Two EC2 instances which are hosting backend application
+    - Custom IAM role for EC2 instance
+    - Security Group for EC2 instance
+    - RDS instance
+    - Security Group for RDS
+    - Subnet group for RDS
+    - ALB connected with the two EC2 instances
+    - Security Group for ALB
+    - ALB Listener
+    - ALB Target Group
+    - CloudFront Distribution
+    - Route53 record
+
+Parameters:
+
+  CidrBlockVPC:
+    Type: String
+    Default: 10.0.0.0/16
+
+  CidrBlockSubnetPublic1:
+    Type: String
+    Default: 10.0.0.0/24
+
+  CidrBlockSubnetPublic2:
+    Type: String
+    Default: 10.0.2.0/24
+
+  CidrBlockSubnetPrivate1:
+    Type: String
+    Default: 10.0.1.0/24
+
+  CidrBlockSubnetPrivate2:
+    Type: String
+    Default: 10.0.3.0/24
+
+  EC2ImageId:
+    Type: AWS::SSM::Parameter::Value<String>
+    Default: /aws/service/ami-amazon-linux-latest/amzn2-ami-hvm-x86_64-gp2
+
+  InstanceType:
+    Description: RESTAPI EC2 instance type
+    Type: String
+    Default: t2.micro
+    AllowedValues:
+      - t1.micro
+      - t2.nano
+      - t2.micro
+      - t2.small
+      - t2.medium
+      - t2.large
+      - m1.small
+      - m1.medium
+      - m1.large
+      - m1.xlarge
+      - m2.xlarge
+      - m2.2xlarge
+      - m2.4xlarge
+      - m3.medium
+      - m3.large
+      - m3.xlarge
+      - m3.2xlarge
+      - m4.large
+      - m4.xlarge
+      - m4.2xlarge
+      - m4.4xlarge
+      - m4.10xlarge
+      - c1.medium
+      - c1.xlarge
+      - c3.large
+      - c3.xlarge
+      - c3.2xlarge
+      - c3.4xlarge
+      - c3.8xlarge
+      - c4.large
+      - c4.xlarge
+      - c4.2xlarge
+      - c4.4xlarge
+      - c4.8xlarge
+      - g2.2xlarge
+      - g2.8xlarge
+      - r3.large
+      - r3.xlarge
+      - r3.2xlarge
+      - r3.4xlarge
+      - r3.8xlarge
+      - i2.xlarge
+      - i2.2xlarge
+      - i2.4xlarge
+      - i2.8xlarge
+      - d2.xlarge
+      - d2.2xlarge
+      - d2.4xlarge
+      - d2.8xlarge
+      - hi1.4xlarge
+      - hs1.8xlarge
+      - cr1.8xlarge
+      - cc2.8xlarge
+      - cg1.4xlarge
+    ConstraintDescription: must be a valid EC2 instance type.
+
+  KeyName:
+    Description: Name of an existing EC2 KeyPair to enable SSH access to the instance
+    Type: 'AWS::EC2::KeyPair::KeyName'
+    ConstraintDescription: must be the name of an existing EC2 KeyPair.
+
+  SSHLocation:
+    Description: The IP address range that can be used to SSH to the EC2 instances
+    Type: String
+    MinLength: '9'
+    MaxLength: '18'
+    Default: 0.0.0.0/0
+    AllowedPattern: '(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})/(\d{1,2})'
+    ConstraintDescription: must be a valid IP CIDR range of the form x.x.x.x/x.
+
+  ContainerRepositoryName:
+    Description: Container Repository name used by EC2 instance to retrive container image from ECR
+    Type: String
+    MinLength: 0
+    MaxLength: 100
+    ConstraintDescription: You must enter a repository name in ECR
+
+  S3DataBucketName:
+    Description: S3 Data bucket name used by backend restapi
+    Type: String
+    Default: '*'
+    MinLength: 1
+    MaxLength: 100
+    ConstraintDescription: You must enter a S3 bucket name used by restapi
+
+  DBClass:
+    Description: Database instance class
+    Type: String
+    Default: db.t3.small
+    AllowedValues:
+      - db.t1.micro
+      - db.m1.small
+      - db.m1.medium
+      - db.m1.large
+      - db.m1.xlarge
+      - db.m2.xlarge
+      - db.m2.2xlarge
+      - db.m2.4xlarge
+      - db.m3.medium
+      - db.m3.large
+      - db.m3.xlarge
+      - db.m3.2xlarge
+      - db.m4.large
+      - db.m4.xlarge
+      - db.m4.2xlarge
+      - db.m4.4xlarge
+      - db.m4.10xlarge
+      - db.r3.large
+      - db.r3.xlarge
+      - db.r3.2xlarge
+      - db.r3.4xlarge
+      - db.r3.8xlarge
+      - db.m2.xlarge
+      - db.m2.2xlarge
+      - db.m2.4xlarge
+      - db.cr1.8xlarge
+      - db.t2.micro
+      - db.t2.small
+      - db.t2.medium
+      - db.t2.large
+      - db.t3.micro
+      - db.t3.small
+      - db.t3.medium
+      - db.t3.large
+    ConstraintDescription: must select a valid database instance type.
+
+  MultiAZDatabase:
+    Default: 'false'
+    Description: Create a Multi-AZ RDS database instance
+    Type: String
+    AllowedValues:
+      - 'true'
+      - 'false'
+    ConstraintDescription: must be either true or false.
+
+  DBAllocatedStorage:
+    Default: '100'
+    Description: The size of the database (Gb)
+    Type: Number
+    MinValue: '5'
+    MaxValue: '1024'
+    ConstraintDescription: must be between 5 and 1024Gb.
+
+  DBSnapshotIdentifier:
+    Description: The snapshot name of DB instance. Blank value will create a new DB instance
+    Type: String
+    MinLength: '0'
+    MaxLength: '100'
+    ConstraintDescription: must be a valid DB snapshot name
+
+  DatabaseEngine:
+    Default: postgres
+    Description: Database Engine
+    Type: String
+
+  DBName:
+    Default: postgres
+    Description: RESTAPI database name
+    Type: String
+    MinLength: '1'
+    MaxLength: '64'
+    AllowedPattern: '[a-zA-Z][a-zA-Z0-9]*'
+    ConstraintDescription: must begin with a letter and contain only alphanumeric characters.
+
+  DBSchema:
+    Default: app
+    Description: The postgres database schema
+    Type: String
+    MinLength: '1'
+    MaxLength: '64'
+    AllowedPattern: '[a-zA-Z][a-zA-Z0-9]*'
+    ConstraintDescription: must begin with a letter and contain only alphanumeric characters.
+
+  DBUser:
+    Default: postgres
+    Description: The postgres database username
+    Type: String
+    MinLength: '1'
+    MaxLength: '16'
+    AllowedPattern: '[a-zA-Z][a-zA-Z0-9]*'
+    ConstraintDescription: must begin with a letter and contain only alphanumeric characters.
+
+  DBPassword:
+    Default: postgres
+    Description: The WordPress database admin account password
+    Type: String
+    MinLength: '8'
+    MaxLength: '41'
+    AllowedPattern: '[a-zA-Z0-9]*'
+    ConstraintDescription: must contain only alphanumeric characters.
+
+  CustomOriginHTTPPort:
+    Description: Backend CloudFront HTTP Port
+    Type: String
+    Default: '80'
+
+  CustomOriginHTTPSPort:
+    Description: Backend CloudFront HTTPS Port
+    Type: String
+    Default: '443'
+
+  InstanceSSHPort:
+    Description: Backend Instance Security Group SSH port
+    Type: String
+    Default: '22'
+
+  InstanceHTTPPort:
+    Description: Backend Instance Security Group HTTP port
+    Type: String
+    Default: '80'
+
+  LoadBalancerHTTPPort:
+    Description: Load Balancer Security Group HTTP port
+    Type: String
+    Default: '80'
+
+  DatabasePort:
+    Description: PostgreSQL Database Port
+    Type: String
+    Default: '5432'
+
+  RestapiDomainName:
+    Description: Restapi domain name
+    Type: String
+    Default: 'api.'
+  
+  SSLCertificateArn:
+    Description: ACM certificate identity
+    Type: String
+
+  HostedZoneResource:
+    Description: Hosted zone id
+    Type: String
+
+  BackendDistributionDefaultTTL:
+    Description: The default amount of time in CloudFront caches, in seconds
+    Type: String
+    Default: 86400
+
+  BackendDistributionMaxTTL:
+    Description: The maximum amount of time in CloudFront caches, in seconds
+    Type: String
+    Default: 31536000
+
+  BackendDistributionMinTTL:
+    Description: The minimun amount of time in CloudFront caches, in seconds
+    Type: String
+    Default: 0
+
+  TagKey:
+    Description: Resources tag key name that identifies related stack.
+    Type: String
+    Default: ServiceName
+    AllowedPattern: '[\x20-\x7E]*'
+    ConstraintDescription: Can contain only ASCII characters.
+
+  ApplicationName:
+    Description: Resources tag value that identifies related stack.
+    Type: String
+    AllowedPattern: '[\x20-\x7E]*'
+    MinLength: 1
+    MaxLength: 17
+    ConstraintDescription: Can contain only ASCII characters.
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: "Network Configuration"
+        Parameters:
+          - CidrBlockVPC
+          - CidrBlockSubnetPublic1
+          - CidrBlockSubnetPublic2
+          - CidrBlockSubnetPrivate1
+          - CidrBlockSubnetPrivate2
+      - Label:
+          default: "EC2 instance Configuration"
+        Parameters:
+          - EC2ImageId
+          - InstanceType
+          - KeyName
+          - SSHLocation
+          - InstanceSSHPort
+          - InstanceHTTPPort
+      - Label:
+          default: "Backend setup"
+        Parameters:
+          - ContainerRepositoryName
+          - S3DataBucketName
+      - Label:
+          default: "Database setup"
+        Parameters:
+          - DBClass
+          - MultiAZDatabase
+          - DBAllocatedStorage
+          - DBSnapshotIdentifier
+          - DatabaseEngine
+          - DatabasePort
+          - DBName
+          - DBSchema
+          - DBUser
+          - DBPassword
+      - Label:
+          default: "Backend CloudFront distribution setup"
+        Parameters:
+          - CustomOriginHTTPPort
+          - CustomOriginHTTPSPort
+          - BackendDistributionDefaultTTL
+          - BackendDistributionMaxTTL
+          - BackendDistributionMinTTL
+      - Label:
+          default: "Backend Load Balancer setup"
+        Parameters:
+          - LoadBalancerHTTPPort
+      - Label:
+          default: "Domain setup"
+        Parameters:
+          - RestapiDomainName
+          - SSLCertificateArn
+          - HostedZoneResource
+      - Label:
+          default: "Application tag setting"
+        Parameters:
+          - TagKey
+          - ApplicationName
+
+Conditions:
+  isBrandNewDB: !Equals [ !Ref DBSnapshotIdentifier, "" ]
+  isCustomDomain: !Not [!Equals [ !Ref RestapiDomainName, "api." ]]
+
+Resources:
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref CidrBlockVPC
+      Tags:
+        - Key: !Ref TagKey
+          Value: !Ref ApplicationName
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-vpc"
+
+  SubnetPublic1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select
+        - 0
+        - Fn::GetAZs: !Ref AWS::Region
+      CidrBlock: !Ref CidrBlockSubnetPublic1
+      Tags:
+        - Key: !Ref TagKey
+          Value: !Ref ApplicationName
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-SubnetPublic1"
+
+  SubnetPublic2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select
+        - 1
+        - Fn::GetAZs: !Ref AWS::Region
+      CidrBlock: !Ref CidrBlockSubnetPublic2
+      Tags:
+        - Key: !Ref TagKey
+          Value: !Ref ApplicationName
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-SubnetPublic2"
+
+  SubnetPrivate1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select
+        - 0
+        - Fn::GetAZs: !Ref AWS::Region
+      CidrBlock: !Ref CidrBlockSubnetPrivate1
+      Tags:
+        - Key: !Ref TagKey
+          Value: !Ref ApplicationName
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-SubnetPrivate1"
+
+  SubnetPrivate2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select
+        - 1
+        - Fn::GetAZs: !Ref AWS::Region
+      CidrBlock: !Ref CidrBlockSubnetPrivate2
+      Tags:
+        - Key: !Ref TagKey
+          Value: !Ref ApplicationName
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-SubnetPrivate2"
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: !Ref TagKey
+          Value: !Ref ApplicationName
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-InternetGateway"
+
+  AttachGateway:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref InternetGateway
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: !Ref TagKey
+          Value: !Ref ApplicationName
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-PublicRouteTable"
+
+  PrivateRouteTable1:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: !Ref TagKey
+          Value: !Ref ApplicationName
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-PrivateRouteTable1"
+
+  PrivateRouteTable2:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: !Ref TagKey
+          Value: !Ref ApplicationName
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-PrivateRouteTable2"
+
+  Route:
+    Type: AWS::EC2::Route
+    DependsOn: AttachGateway
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  RouteTableAssociationPublic1:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref SubnetPublic1
+      RouteTableId: !Ref PublicRouteTable
+
+  RouteTableAssociationPublic2:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref SubnetPublic2
+      RouteTableId: !Ref PublicRouteTable
+
+  RouteTableAssociationPrivate1:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref SubnetPrivate1
+      RouteTableId: !Ref PrivateRouteTable1
+
+  RouteTableAssociationPrivate2:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref SubnetPrivate2
+      RouteTableId: !Ref PrivateRouteTable2
+
+  InstanceSecurityGroup:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      VpcId: !Ref VPC
+      GroupDescription: Enable SSH access via port 22
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: !Ref InstanceSSHPort
+          ToPort: !Ref InstanceSSHPort
+          CidrIp: !Ref SSHLocation
+        - IpProtocol: tcp
+          FromPort: !Ref InstanceHTTPPort
+          ToPort: !Ref InstanceHTTPPort
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: !Ref TagKey
+          Value: !Ref ApplicationName
+        - Key: Name
+          Value: !Sub "${ApplicationName}-ec2instance"
+
+  EC2InstanceCustomRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - ec2.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      Path: '/'
+      Policies:
+        - PolicyName: ec2policy
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action: 'ecr:*'
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - 's3:ListBucket'
+                  - 's3:GetBucketLocation'
+                Resource: !Sub 'arn:aws:s3:::${S3DataBucketName}'
+              - Effect: Allow
+                Action:
+                  - 's3:GetObject'
+                  - 's3:PutObject'
+                Resource: !Sub 'arn:aws:s3:::${S3DataBucketName}/*'
+
+  CustomRoleInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Path: '/'
+      Roles:
+      - !Ref EC2InstanceCustomRole
+  
+  EC2Instance1:
+    Type: 'AWS::EC2::Instance'
+    DependsOn: AttachGateway
+    Properties:
+      IamInstanceProfile: !Ref CustomRoleInstanceProfile
+      ImageId: !Ref EC2ImageId
+      InstanceType: !Ref InstanceType
+      KeyName: !Ref KeyName
+      Tags:
+        - Key: !Ref TagKey
+          Value: !Ref ApplicationName
+        - Key: Name
+          Value: !Sub "${ApplicationName}-ec2instance1"
+      NetworkInterfaces:
+        - GroupSet:
+            - !Ref InstanceSecurityGroup
+          AssociatePublicIpAddress: 'true'
+          DeviceIndex: '0'
+          DeleteOnTermination: 'true'
+          SubnetId: !Ref SubnetPublic1
+      UserData:
+        Fn::Base64:
+          !Sub |
+            #!/bin/bash
+            yum update -y
+            amazon-linux-extras install docker -y
+            service docker start
+            usermod -a -G docker ec2-user
+            chkconfig docker on
+            aws ecr get-login-password --region ${AWS::Region} | \
+              docker login --username AWS --password-stdin ${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com
+            docker pull ${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${ContainerRepositoryName}:latest
+            docker run -p 80:8888 \
+              -d \
+              -e DB_HOST=${DBInstance.Endpoint.Address} \
+              -e DB_PORT=${DatabasePort} \
+              -e DB_NAME=${DBName} \
+              -e DB_SCHEMA=${DBSchema} \
+              -e DB_USERNAME=${DBUser} \
+              -e DB_PASSWORD=${DBPassword} \
+              --name ${ApplicationName}-backend \
+              ${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${ContainerRepositoryName}:latest
+
+  EC2Instance2:
+    Type: 'AWS::EC2::Instance'
+    DependsOn: AttachGateway
+    Properties:
+      IamInstanceProfile: !Ref CustomRoleInstanceProfile
+      ImageId: !Ref EC2ImageId
+      InstanceType: !Ref InstanceType
+      KeyName: !Ref KeyName
+      Tags:
+        - Key: !Ref TagKey
+          Value: !Ref ApplicationName
+        - Key: Name
+          Value: !Sub "${ApplicationName}/EC2Instance2"
+      NetworkInterfaces:
+        - GroupSet:
+            - !Ref InstanceSecurityGroup
+          AssociatePublicIpAddress: 'true'
+          DeviceIndex: '0'
+          DeleteOnTermination: 'true'
+          SubnetId: !Ref SubnetPublic2
+      UserData:
+        Fn::Base64:
+          !Sub |
+            #!/bin/bash
+            yum update -y
+            amazon-linux-extras install docker -y
+            service docker start
+            usermod -a -G docker ec2-user
+            chkconfig docker on
+            aws ecr get-login-password --region ${AWS::Region} | \
+              docker login --username AWS --password-stdin ${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com
+            docker pull ${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${ContainerRepositoryName}:latest
+            docker run -p 80:8888 \
+              -d \
+              -e DB_HOST=${DBInstance.Endpoint.Address} \
+              -e DB_PORT=${DatabasePort} \
+              -e DB_NAME=${DBName} \
+              -e DB_SCHEMA=${DBSchema} \
+              -e DB_USERNAME=${DBUser} \
+              -e DB_PASSWORD=${DBPassword} \
+              --name ${ApplicationName}-backend \
+              ${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${ContainerRepositoryName}:latest
+
+  DBEC2SecurityGroup:
+    Type: 'AWS::EC2::SecurityGroup'
+    DependsOn:
+      - SubnetPrivate1
+      - SubnetPrivate2
+    Properties:
+      GroupDescription: Open database for access
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: !Ref DatabasePort
+          ToPort: !Ref DatabasePort
+          SourceSecurityGroupId: !Ref InstanceSecurityGroup
+      VpcId: !Ref VPC
+      Tags:
+        - Key: !Ref TagKey
+          Value: !Ref ApplicationName
+        - Key: Name
+          Value: !Sub "${ApplicationName}-database"
+
+  DBSubnetGroup:
+    Type: "AWS::RDS::DBSubnetGroup"
+    Properties:
+      DBSubnetGroupDescription: !Sub "${ApplicationName} Database subnet group"
+      DBSubnetGroupName: !Sub "${ApplicationName}-dbsubnetgroup"
+      SubnetIds:
+        - !Ref SubnetPrivate1
+        - !Ref SubnetPrivate2
+      Tags:
+        - Key: !Ref TagKey
+          Value: !Ref ApplicationName
+
+  DBInstance:
+    Type: 'AWS::RDS::DBInstance'
+    Properties:
+      Engine: !Ref DatabaseEngine
+      MultiAZ: !Ref MultiAZDatabase
+      DBInstanceClass: !Ref DBClass
+      DBInstanceIdentifier: !Sub "${ApplicationName}-db"
+      AllocatedStorage: !Ref DBAllocatedStorage
+      DBSnapshotIdentifier:
+        !If [isBrandNewDB, !Ref "AWS::NoValue", !Ref "DBSnapshotIdentifier" ]
+      DBName:
+        !If [isBrandNewDB, !Ref DBName, !Ref "AWS::NoValue"]
+      MasterUsername:
+        !If [isBrandNewDB, !Ref DBUser, !Ref "AWS::NoValue"]
+      MasterUserPassword:
+        !If [isBrandNewDB, !Ref DBPassword, !Ref "AWS::NoValue"]
+      VPCSecurityGroups:
+        - !GetAtt 
+          - DBEC2SecurityGroup
+          - GroupId
+      DBSubnetGroupName:
+        Ref: DBSubnetGroup
+      Tags:
+        - Key: !Ref TagKey
+          Value: !Ref ApplicationName
+
+  ALBSecurityGroup:
+    Type: "AWS::EC2::SecurityGroup"
+    Properties:
+      GroupDescription: "-"
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: !Ref LoadBalancerHTTPPort
+          ToPort: !Ref LoadBalancerHTTPPort
+          CidrIp: "0.0.0.0/0"
+      VpcId: !Ref VPC
+      Tags:
+        - Key: !Ref TagKey
+          Value: !Ref ApplicationName
+        - Key: Name
+          Value: !Sub "${ApplicationName}-loadbalancer"
+
+  ALBListener:
+    Type: 'AWS::ElasticLoadBalancingV2::Listener'
+    Properties:
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref ALBTargetGroup
+      LoadBalancerArn: !Ref ApplicationLoadBalancer
+      Port: !Ref LoadBalancerHTTPPort
+      Protocol: HTTP
+
+  ALBTargetGroup:
+    Type: 'AWS::ElasticLoadBalancingV2::TargetGroup'
+    Properties:
+      HealthCheckPath: /active/db
+      HealthCheckIntervalSeconds: 30
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 3
+      Name: !Sub "${AWS::StackName}-target"
+      Port: !Ref LoadBalancerHTTPPort
+      Protocol: HTTP
+      UnhealthyThresholdCount: 5
+      VpcId: !Ref VPC
+      TargetGroupAttributes:
+        - Key: stickiness.enabled
+          Value: 'true'
+        - Key: stickiness.type
+          Value: lb_cookie
+        - Key: stickiness.lb_cookie.duration_seconds
+          Value: '30'
+      TargetType: instance
+      Targets:
+        - Id: !Ref EC2Instance1
+          Port: !Ref InstanceHTTPPort
+        - Id: !Ref EC2Instance2
+          Port: !Ref InstanceHTTPPort
+      Tags:
+        - Key: !Ref TagKey
+          Value: !Ref ApplicationName
+
+  ApplicationLoadBalancer:
+    Type: 'AWS::ElasticLoadBalancingV2::LoadBalancer'
+    Properties:
+      Name: !Sub "${AWS::StackName}-elb"
+      Subnets: 
+        - !Ref SubnetPublic1
+        - !Ref SubnetPublic2
+      Scheme: "internet-facing"
+      SecurityGroups: 
+        - !Ref ALBSecurityGroup
+      Tags:
+        - Key: !Ref TagKey
+          Value: !Ref ApplicationName
+
+  BackendDistribution:
+    Type: 'AWS::CloudFront::Distribution'
+    Properties:
+      DistributionConfig:
+        Origins:
+          - DomainName: !GetAtt ApplicationLoadBalancer.DNSName
+            Id: CustomOrigin
+            CustomOriginConfig:
+              HTTPPort: !Ref CustomOriginHTTPPort
+              HTTPSPort: !Ref CustomOriginHTTPSPort
+              OriginSSLProtocols:
+                !If
+                  - isCustomDomain
+                  - 
+                    - TLSv1
+                  - 
+                    - TLSv1.2
+              OriginProtocolPolicy: http-only
+        Enabled: 'true'
+        Comment: !Sub '${AWS::StackName}-distribution'
+        DefaultRootObject: /
+        DefaultCacheBehavior:
+          TargetOriginId: CustomOrigin
+          SmoothStreaming: 'false'
+          AllowedMethods:
+            - GET
+            - HEAD
+            - DELETE
+            - OPTIONS
+            - PATCH
+            - POST
+            - PUT
+          CachedMethods:
+            - GET
+            - HEAD
+            - OPTIONS
+          ForwardedValues:
+            QueryString: 'true'
+            Cookies:
+              Forward: all
+          DefaultTTL: !Ref BackendDistributionDefaultTTL
+          MaxTTL: !Ref BackendDistributionMaxTTL
+          MinTTL: !Ref BackendDistributionMinTTL
+          ViewerProtocolPolicy: redirect-to-https
+        Aliases:
+          !If
+            - isCustomDomain
+            - 
+              - !Ref RestapiDomainName
+            - 
+              - !Ref "AWS::NoValue"
+        ViewerCertificate:
+          !If
+            - isCustomDomain
+            - SslSupportMethod: sni-only
+              AcmCertificateArn: !Ref SSLCertificateArn
+            - CloudFrontDefaultCertificate: 'true'
+        HttpVersion: http2
+      Tags:
+        - Key: !Ref TagKey
+          Value: !Ref ApplicationName
+
+  BackendDNSRecord:
+    Type: AWS::Route53::RecordSetGroup
+    Condition: isCustomDomain
+    Properties:
+      HostedZoneId: !Ref HostedZoneResource
+      RecordSets:
+        - Name: !Ref RestapiDomainName
+          Type: A
+          AliasTarget:
+            DNSName: !GetAtt BackendDistribution.DomainName
+            HostedZoneId: Z2FDTNDATAQYW2
+
+Outputs:
+  EC2Instance1IP:
+    Value: !GetAtt 
+      - EC2Instance1
+      - PublicIp
+    Description: Newly created instance IP address
+
+  EC2Instance2IP:
+    Value: !GetAtt 
+      - EC2Instance2
+      - PublicIp
+    Description: Newly created instance IP address
+
+  DBInstanceURI:
+    Value: !GetAtt DBInstance.Endpoint.Address
+    Description: Database URI
+
+  LoadBlancerDNSName:
+    Value: !GetAtt ApplicationLoadBalancer.DNSName
+    Description: Newly created load balancer DNS name
+
+  DistributionDomainName:
+    Value: !GetAtt BackendDistribution.DomainName
+    Description: backend cloudfront domain
+
+  BackendURL:
+    Condition: isCustomDomain
+    Value: !Join 
+      - ''
+      - - 'https://'
+        - !Ref RestapiDomainName
+    Description: Backend URL
