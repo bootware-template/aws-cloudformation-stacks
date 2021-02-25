@@ -223,7 +223,7 @@ The following parameters are required for backend template.
 
     Execute the following comand in terminal to set environment variables in `setup.sh`:
     ```
-    source setup.sh
+    $ source setup.sh
     ```
     If you want to specify website custom domain, you have to prepare the following dependencies. Follow the instruction below.
     - Route53 Hosted Zone
@@ -233,10 +233,10 @@ The following parameters are required for backend template.
 
     Create new Route53 Hosted Zone for your custom domain. Run the following command in your terminal.
     ```
-    aws route53 create-hosted-zone --name "$WEBSITE_DOMAIN_NAME" --caller-reference `date +%Y-%m-%d_%H-%M-%S` --hosted-zone-config Comment="$APP_NAME"
+    $ aws route53 create-hosted-zone --name "$WEBSITE_DOMAIN_NAME" --caller-reference `date +%Y-%m-%d_%H-%M-%S` --hosted-zone-config Comment="$APP_NAME"
     ```
-    You can get Hosted Zone ID like `/hostedzone/Z0961896283IM3W80T0FD`. Copy the ID value `Z0961896283IM3W80T0FD` and set it to `HOSTEDZONE_ID` environment variable in `setup.sh` file.
-    - `export HOSTEDZONE_ID='Z0961896283IM3W80T0FD'`
+    You can get Hosted Zone ID like `/hostedzone/Z0962796283IM3W80T0FD`. Copy the ID value `Z0962796283IM3W80T0FD` and set it to `HOSTEDZONE_ID` environment variable in `setup.sh` file.
+    - `export HOSTEDZONE_ID='Z0962796283IM3W80T0FD'`
 
     If your domain is registered with a registrar other than Route 53, you must update the name servers with your registrar to make Route 53 the DNS service for the domain. Yon can see four name servers in the return value like below.
     ```
@@ -251,18 +251,18 @@ The following parameters are required for backend template.
 
     Before you request new certificate, you have to change aws region to `us-east-1`. Run the following command in terminal.
     ```
-    export AWS_DEFAULT_REGION=us-east-1
+    $ export AWS_DEFAULT_REGION=us-east-1
     ```
     Then, request new certificate by the following command.
     ```
-    aws acm request-certificate --domain-name "$WEBSITE_DOMAIN_NAME" --validation-method DNS --subject-alternative-names "*.$WEBSITE_DOMAIN_NAME" --tag Key=Name,Value="$APP_NAME"
+    $ aws acm request-certificate --domain-name "$WEBSITE_DOMAIN_NAME" --validation-method DNS --subject-alternative-names "*.$WEBSITE_DOMAIN_NAME" --tag Key=Name,Value="$APP_NAME"
     ```
     You can see the certificate arn as the return value. Set the arn value as `SSL_CERTIFICATE_ARN` environment variable in `setup.sh` file.
     - `export SSL_CERTIFICATE_ARN='arn:aws:acm:ap-northeast-1:112234567899:certificate/cfe138d8-bc19-4b2e-be68-ba9e03abef19'`
 
     Finally, you have to change aws region back to `ap-northeast-1`. Run the following command.
     ```
-    export AWS_DEFAULT_REGION=ap-northeast-1
+    $ export AWS_DEFAULT_REGION=ap-northeast-1
     ```
     For more information about `aws acm request-certificate` command, see [reference document here](https://docs.aws.amazon.com/cli/latest/reference/acm/request-certificate.html).
 
@@ -270,11 +270,11 @@ The following parameters are required for backend template.
 
     For backend cloudformation stack, you have to prepare EC2 Keypair first. Run the following command in terminal.
     ```
-    aws ec2 create-key-pair --key-name "$APP_NAME-keypair" --query 'KeyMaterial' --output text > "$APP_NAME-keypair.pem"
+    $ aws ec2 create-key-pair --key-name "$APP_NAME-keypair" --query 'KeyMaterial' --output text > "$APP_NAME-keypair.pem"
     ```
     Then, you have to set `EC2_KEYPAIR_NAME` environment variable in your terminal.
     ```
-    export EC2_KEYPAIR_NAME="$APP_NAME-keypair"
+    $ export EC2_KEYPAIR_NAME="$APP_NAME-keypair"
     ```
     For more information about `aws ec2 create-key-pair` command, see [reference document here](https://docs.aws.amazon.com/cli/latest/reference/ec2/create-key-pair.html).
 
@@ -288,6 +288,13 @@ The following parameters are required for backend template.
     Optinally, you can restore database instance from snapshot. To specify the database snapshot name to be restored, set `DB_SNAPSHOT_NAME` envionment variable in `setup.sh` file. If you leave this variable blank, CloudFormation will create a brand new database instance.
     - `export DB_SNAPSHOT_NAME='example_snapshot_name'`
 
+7. #### Set environment variables in current terminal
+
+    Execute the following comand in terminal again to set environment variables specified above:
+    ```
+    $ source setup.sh
+    ```
+
 ### Deploy Web service with CloudFormation templates
 
 #### Frontend deploy
@@ -298,7 +305,7 @@ Follow the instruction below to deploy frontend resources.
 
     Execute the following command:
     ```
-    aws cloudformation create-stack --stack-name "$APP_NAME-frontend" \
+    $ aws cloudformation create-stack --stack-name "$APP_NAME-frontend" \
       --template-body file://frontend_template.yml \
       --parameters \
       ParameterKey=WebsiteDomainName,ParameterValue="$WEBSITE_DOMAIN_NAME" \
@@ -313,7 +320,7 @@ Follow the instruction below to deploy frontend resources.
 
     Execute the following command to check the stack status:
     ```
-    aws cloudformation describe-stacks --stack-name "$APP_NAME-frontend" --output json | jq -r '.Stacks[] | .StackStatus'
+    $ aws cloudformation describe-stacks --stack-name "$APP_NAME-frontend" --output json | jq -r '.Stacks[] | .StackStatus'
     ```
     Wait until the stack status becomes `CREATE_COMPLETE`.
 
@@ -321,7 +328,7 @@ Follow the instruction below to deploy frontend resources.
 
     Execute the following command to check the output and see S3 frontend bucket name:
     ```
-    aws cloudformation describe-stacks --stack-name "$APP_NAME-frontend" --output json | jq -r '.Stacks[] | .Outputs[]'
+    $ aws cloudformation describe-stacks --stack-name "$APP_NAME-frontend" --output json | jq -r '.Stacks[] | .Outputs[]'
     ```
     You can see the `S3FrontBucket` name as `OutputValue`:
     ```
@@ -336,7 +343,7 @@ Follow the instruction below to deploy frontend resources.
 
     From your frontend working directory, execute the following s3 command. This command upload all files and directories in the current working directory.
     ```
-    aws s3 cp . "s3://$APP_NAME-frontend/" --recursive
+    $ aws s3 cp . "s3://$APP_NAME-frontend/" --recursive
     ```
 
     For more information about `aws s3 cp` command, see [reference document here](https://docs.aws.amazon.com/cli/latest/reference/s3/cp.html).
@@ -349,7 +356,7 @@ Follow the instruction below to deploy backend resources.
 
     Execute the following command:
     ```
-    aws cloudformation create-stack --stack-name "$APP_NAME-backend" \
+    $ aws cloudformation create-stack --stack-name "$APP_NAME-backend" \
       --template-body file://backend_template.yml \
       --parameters \
       ParameterKey=RestapiDomainName,ParameterValue="$RESTAPI_DOMAIN_NAME" \
@@ -392,7 +399,7 @@ Follow the instruction below to deploy backend resources.
 
     Execute the following command to check the stack status:
     ```
-    aws cloudformation describe-stacks --stack-name "$APP_NAME-backend" --output json | jq -r '.Stacks[] | .StackStatus'
+    $ aws cloudformation describe-stacks --stack-name "$APP_NAME-backend" --output json | jq -r '.Stacks[] | .StackStatus'
     ```
     Wait until the stack status becomes `CREATE_COMPLETE`.
 
@@ -400,7 +407,7 @@ Follow the instruction below to deploy backend resources.
 
     Execute the following command to check the output and see EC2 istance public IPs:
     ```
-    aws cloudformation describe-stacks --stack-name "$APP_NAME-backend" --output json | jq -r '.Stacks[] | .Outputs[]'
+    $ aws cloudformation describe-stacks --stack-name "$APP_NAME-backend" --output json | jq -r '.Stacks[] | .Outputs[]'
     ```
     You can see the `EC2Instance1IP` and `EC2Instance2IP` as follow:
     ```
@@ -418,9 +425,9 @@ Follow the instruction below to deploy backend resources.
 
     Connect to each two EC2 instances and check if docker runs collectly. First, connect to EC2 instance through ssh:
     ```
-    ssh -i "$EC2_KEYPAIR_NAME.pem" ec2-user@instance-public-ip
+    $ ssh -i "$EC2_KEYPAIR_NAME.pem" ec2-user@instance-public-ip
     ```
     Then, in the EC2 instance, check if the container runs collectly:
     ```
-    docker ps
+    $ docker ps
     ```
